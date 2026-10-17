@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "rooms": []
+  "rooms": [
+    {
+      "id": "2947ba50-df6b-4c21-b06b-e72d1fdb9c56",
+      "visibility": "open",
+      "name": "t2",
+      "host": "bklappi",
+      "address": "https://clubs-logo-cliff-citations.trycloudflare.com",
+      "updatedAt": 1792272151031
+    }
+  ]
 }
