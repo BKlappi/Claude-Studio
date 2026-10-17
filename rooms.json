@@ -1,13 +1,4 @@
 {
   "version": 1,
-  "rooms": [
-    {
-      "id": "196ae590-095e-4d6a-a1c8-e422f938243e",
-      "visibility": "open",
-      "name": "t1",
-      "host": "bklappi",
-      "address": "https://sociology-notices-marina-package.trycloudflare.com",
-      "updatedAt": 1792257976924
-    }
-  ]
+  "rooms": []
 }
