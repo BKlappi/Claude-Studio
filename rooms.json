@@ -1,13 +1,4 @@
 {
   "version": 1,
-  "rooms": [
-    {
-      "id": "2947ba50-df6b-4c21-b06b-e72d1fdb9c56",
-      "visibility": "open",
-      "name": "t2",
-      "host": "bklappi",
-      "address": "https://slowly-rev-aging-petersburg.trycloudflare.com",
-      "updatedAt": 1792272206779
-    }
-  ]
+  "rooms": []
 }
