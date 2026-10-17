@@ -1,0 +1,9 @@
+node_modules/
+room-host/data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.DS_Store
+# Written by Claude Code each time it loads the mod
+plugin/.claude-plugin/types/

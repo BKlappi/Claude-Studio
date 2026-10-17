@@ -1,0 +1,18 @@
+{
+  "name": "studio",
+  "private": true,
+  "type": "module",
+  "description": "Studio: multi-user agent rooms for Claude Code (plugin + room host)",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @studio/room-host dev",
+    "test": "pnpm --filter @studio/room-host test && claude plugin test plugin",
+    "test:host": "pnpm --filter @studio/room-host test",
+    "test:plugin": "claude plugin test plugin",
+    "validate": "claude plugin validate plugin",
+    "typecheck": "pnpm --filter @studio/room-host typecheck && pnpm --filter @studio/room-host exec tsc -p ../plugin",
+    "studio": "claude --plugin-dir ./plugin"
+  }
+}

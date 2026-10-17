@@ -1,0 +1,2 @@
+# Signature fixtures keep the line endings ssh-keygen wrote (Windows' build writes CRLF).
+room-host/test/fixtures/** -text

@@ -1,0 +1,6 @@
+{
+  "name": "studio",
+  "version": "0.1.0",
+  "description": "Multi-user agent rooms: shared rooms, task handoffs, overlap detection and compact statuses",
+  "types": "./types/index.d.ts"
+}

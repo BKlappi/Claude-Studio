@@ -1,0 +1,5 @@
+studio-join v1
+room=5f0c2a5e-1d2b-4c3a-9e8f-0123456789ab
+origin=https://quiet-river.trycloudflare.com
+login=octo-cat
+nonce=q2V9mZ3xTt1u8aYbK0cR4w
