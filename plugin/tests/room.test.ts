@@ -14,16 +14,18 @@ const ME: MeResponse = { login: 'ana', role: 'member', room: ROOM }
 const SNAPSHOT: RoomSnapshot = {
   room: ROOM,
   members: [
-    { login: 'ben', role: 'owner', verified: true, joinedAt: 1 },
-    { login: 'ana', role: 'member', verified: true, joinedAt: 2 },
-    { login: 'cem', role: 'member', verified: false, joinedAt: 3 },
+    { login: 'ben', role: 'owner', verified: true, joinedAt: 1, isOnline: true },
+    { login: 'ana', role: 'member', verified: true, joinedAt: 2, isOnline: true },
+    { login: 'cem', role: 'member', verified: false, joinedAt: 3, isOnline: false },
   ],
   tasks: [
-    { id: 't1', roomId: 'r1', title: 'dark mode', spec: '', state: 'claimed', difficulty: null, claimedBy: 'ben', createdBy: 'ben', createdAt: 1, updatedAt: 1, version: 2 },
-    { id: 't2', roomId: 'r1', title: 'login form', spec: '', state: 'open', difficulty: null, claimedBy: null, createdBy: 'ben', createdAt: 2, updatedAt: 2, version: 1 },
+    { id: 't1', roomId: 'r1', title: 'dark mode', spec: '', state: 'claimed', difficulty: null, claimedBy: 'ben', createdBy: 'ben', askedBy: ['ben'], createdAt: 1, updatedAt: 1, version: 2 },
+    { id: 't2', roomId: 'r1', title: 'login form', spec: '', state: 'open', difficulty: null, claimedBy: null, createdBy: 'ben', askedBy: ['ben'], createdAt: 2, updatedAt: 2, version: 1 },
   ],
   log: [{ seq: 1, roomId: 'r1', kind: 'message', author: 'ben', body: 'hello', data: null, at: 1 }],
   statusText: 'room: frontend | v0\ndoing: -\ntouching: -\ndecided: -\nplanned: -\nblocked: -',
+  batch: null,
+  state: null,
   cursor: 1,
 }
 
@@ -105,7 +107,7 @@ test('back in the saved room at session start, drawn in the pane', async ($, on)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'studio', surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: 'frontend' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'hosted by ben · ben, ana, cem (unverified)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'ben (host, online), ana (successor 1, online), cem (unverified, joined)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'dark mode · ben' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '[ben]: hello' })).toBeDefined()
     expect(await ui.find({ key: 'claim:t1' })).toBeUndefined()

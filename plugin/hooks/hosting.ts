@@ -19,13 +19,16 @@
 // room (register.tsx).
 
 import type { EngineInterface } from 'claude-code'
+import { isBranchName } from '../protocol/branch'
 import { githubRepo, inviteLink, loginKey, permissionOf, repoUrlOf, roleFor } from '../protocol/join'
 import type { GithubRepo, Invite } from '../protocol/join'
-import type { HostEvent, HostRoom, Role, Room, RoomVisibility } from '../protocol/types'
+import type { HostEvent, HostRoom, ImportRoomRequest, Role, Room, RoomVisibility } from '../protocol/types'
 import { StudioError, hostClient } from './api'
 import { PANE_ID } from './commands'
-import { publishRoom, readDirectory, unpublishRoom } from './directory'
-import type { Listing } from './directory'
+import { startCoordinator, stopCoordinator } from './coordinator'
+import { claimRoom, findRoom, publishRoom, readDirectory, unpublishRoom } from './directory'
+import type { DirectoryEntry, Listing } from './directory'
+import { provesRoom, rejoinAt } from './handover'
 import { checkHost, roomHostPaths } from './hostcheck'
 import { githubLogin } from './identity'
 import { answers } from './listing'
@@ -65,6 +68,12 @@ type Hosting = {
   // A room host somebody started by hand, found by /room attach: not this
   // session's child, so nothing here starts, restarts or stops it.
   isAttached: boolean
+  // The room is another host's now (handed over, or taken over while this
+  // machine was away): its directory entry is theirs, and stays.
+  isMoved: boolean
+  // Taking over from a host that vanished (PLAN.md §5): the directory entry
+  // as it was read before; publishing wins only while it is still that one.
+  claim: { expected: DirectoryEntry | null; onTaken: () => void } | null
 }
 
 // A Hosting with no process to supervise.
@@ -137,6 +146,7 @@ async function finish($: EngineInterface, h: Hosting, lost: string | null): Prom
   if (hosting !== h) return
   hosting = undefined
   h.isStopping = true
+  stopCoordinator()
   h.exposure?.child.stop()
   h.roomHost.stop()
   await setJoins($, [])
@@ -154,9 +164,9 @@ async function finish($: EngineInterface, h: Hosting, lost: string | null): Prom
     if (saved?.isHost === true && saved.roomId === h.room?.id) await forgetRoom($)
     $.ui.toast(`Studio: room lost: ${lost}`)
   }
-  if (h.room !== null && h.isInRepo) {
+  if (h.room !== null && h.isInRepo && !h.isMoved) {
     const roomId = h.room.id
-    inBackground($, unpublishRoom($, h.cwd, roomId, h.login))
+    inBackground($, unpublishRoom($, h.cwd, roomId, h.login, { address: h.exposure?.address ?? null, roomKey: h.room.roomKey }))
   }
 }
 
@@ -218,16 +228,46 @@ async function superviseTunnel($: EngineInterface, h: Hosting): Promise<void> {
 function announce($: EngineInterface, h: Hosting): void {
   const invite = hostedInvite()
   if (invite === null || h.room === null) return
-  // A transcript line, never sent to the model: a private room's link is a secret.
-  $.ui.log(`Studio: ${h.room.name} is reachable at ${invite.address}. Invite link:\n${inviteLink(invite)}`)
+  // Transcript lines, never sent to the model: a private room's link is a secret.
+  // One line each: the transcript shows a newline inside a line as `�`.
+  $.ui.log(`Studio: ${h.room.name} is reachable at ${invite.address}. Invite link:`)
+  $.ui.log(inviteLink(invite))
   $.ui.toast(`Studio: ${h.room.name} is reachable: /room invite for the link`)
 }
 
 // The directory entry, with this host's entries that no longer answer dropped.
+// Taking over from a host that vanished, only while no other candidate got
+// there first: a lost race ends this hosting, and the session follows the winner.
 async function publish($: EngineInterface, h: Hosting): Promise<void> {
   const room = h.room
   const exposure = h.exposure
-  if (!h.isInRepo || room === null || exposure === null) return
+  if (!h.isInRepo || room === null || exposure === null || h.isMoved) return
+  const listing: Listing = {
+    id: room.id,
+    name: room.name,
+    host: h.login,
+    address: exposure.address,
+    visibility: room.visibility,
+    updatedAt: await $.clock.now(),
+  }
+  const claim = h.claim
+  if (claim !== null) {
+    // Only the first publish is a claim: a later one (a new tunnel address) is ours to make.
+    h.claim = null
+    let outcome: 'won' | 'taken'
+    try {
+      outcome = await claimRoom($, h.cwd, listing, room.roomKey, { login: h.login, expected: claim.expected })
+    } catch (error) {
+      $.ui.log(`Studio: the room is not in the room directory, so share its link (${describe(error)})`)
+      return
+    }
+    if (outcome === 'taken') {
+      h.isMoved = true
+      await finish($, h, null)
+      claim.onTaken()
+    }
+    return
+  }
   try {
     const { entries } = await readDirectory($, h.cwd)
     const older = entries
@@ -235,17 +275,32 @@ async function publish($: EngineInterface, h: Hosting): Promise<void> {
       .slice(0, MAX_PROBES)
     const isAlive = await Promise.all(older.map(entry => answers($, entry.address)))
     const dropIds = older.filter((_, at) => isAlive[at] !== true).map(entry => entry.id)
-    const listing: Listing = {
-      id: room.id,
-      name: room.name,
-      host: h.login,
-      address: exposure.address,
-      visibility: room.visibility,
-      updatedAt: await $.clock.now(),
-    }
     await publishRoom($, h.cwd, listing, room.roomKey, { login: h.login, dropIds })
   } catch (error) {
     $.ui.log(`Studio: the room is not in the room directory, so share its link (${describe(error)})`)
+  }
+}
+
+// While this session hosts, the directory is read now and then: a machine that
+// slept through its room being taken over (PLAN.md §5) finds the room listed
+// at another host, which proves it holds the room's secret. Then this hosting
+// ends, and the session follows the room there as a member.
+const WATCH_EVERY_MS = 60_000
+
+async function watchDirectory($: EngineInterface, h: Hosting): Promise<void> {
+  while (hosting === h && h.isInRepo && !h.isAttached) {
+    await $.clock.sleep(WATCH_EVERY_MS)
+    const room = h.room
+    if (hosting !== h || room === null || h.exposure === null) continue
+    const found = await findRoom($, h.cwd, room.id, room.roomKey).catch(() => null)
+    const listing = found?.listing ?? null
+    if (listing === null || listing.address === h.exposure.address) continue
+    const saved = await loadSaved($)
+    if (saved?.roomSecret === undefined || !(await provesRoom($, listing.address, room.id, saved.roomSecret))) continue
+    h.isMoved = true
+    await finish($, h, null)
+    $.ui.toast(`Studio: ${room.name} moved to ${listing.host} while this machine was away: following it there`)
+    await rejoinAt($, saved, listing.address, { from: h.login, to: listing.host })
   }
 }
 
@@ -289,6 +344,18 @@ async function exposeAndAnnounce($: EngineInterface, h: Hosting, providers: read
 async function repoOf($: EngineInterface, cwd: string): Promise<GithubRepo | null> {
   const origin = await runIfThere($, ['git', 'remote', 'get-url', 'origin'], { cwd }).catch(() => null)
   return origin?.exitCode === 0 ? githubRepo(origin.stdout.trim()) : null
+}
+
+// The branch a room's work starts from (D22): the repo's default branch as
+// origin names it, else the one checked out here; null when neither is a
+// plain branch name.
+async function defaultBranch($: EngineInterface, cwd: string): Promise<string | null> {
+  const head = await runIfThere($, ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd }).catch(() => null)
+  const fromOrigin = head?.exitCode === 0 ? head.stdout.trim().replace(/^origin\//, '') : ''
+  if (isBranchName(fromOrigin)) return fromOrigin
+  const current = await runIfThere($, ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd }).catch(() => null)
+  const name = current?.exitCode === 0 ? current.stdout.trim() : ''
+  return name !== 'HEAD' && isBranchName(name) ? name : null
 }
 
 // The host person's own role (D19), from what `gh` says they may do in the
@@ -338,7 +405,6 @@ export async function createRoom($: EngineInterface, options: CreateOptions): Pr
   if (login === null) throw new Error('which GitHub login is yours? Run /studio login <your-github-login> first')
   // Before anything starts: what this machine lacks, named once.
   const { providers, note: reachNote } = await checkHost($, { via: options.via })
-  const { roomHostEntry, relayEntry } = roomHostPaths($.plugin.root)
   const cwd = await $.session.root()
   const repo = await repoOf($, cwd)
   const { role, note: roleNote } = await hostRole($, repo, login)
@@ -346,6 +412,38 @@ export async function createRoom($: EngineInterface, options: CreateOptions): Pr
     throw new Error(roleNote ?? 'only owners and admins of the repo create private rooms')
   }
   const note = [roleNote, reachNote].filter(line => line !== null).join('\n') || null
+  const baseBranch = repo === null ? null : await defaultBranch($, cwd)
+  const { room } = await launch($, { login, cwd, isInRepo: repo !== null, providers, note, claim: null }, async api => {
+    const created = await api.createRoom({
+      name: options.name,
+      visibility: options.visibility,
+      repoUrl: repo === null ? undefined : repoUrlOf(repo),
+      baseBranch: baseBranch ?? undefined,
+      login,
+      role,
+    })
+    return { ...created, role, keep: {} }
+  })
+
+  const how = providers.length === 1 ? providers[0] : `${providers.join(', then ')}`
+  return [
+    `${room.name} is open on this machine${repo === null ? '' : ` for ${repo.owner}/${repo.name}`}.`,
+    `Making it reachable (${how}); the invite link prints here once the address answers.`,
+    ...(note === null ? [] : [note]),
+  ].join('\n')
+}
+
+type Opened = { room: Room; token: string; roomKey: string | null; role: Role; keep: Partial<Saved> }
+
+// The room host as this session's child, a room on it (`open`: made new, or
+// carried on from a mirror), the session in it as its host, the coordinator,
+// and in the background the address, the invite and the directory entry.
+async function launch(
+  $: EngineInterface,
+  options: { login: string; cwd: string; isInRepo: boolean; providers: readonly Provider[]; note: string | null; claim: Hosting['claim'] },
+  open: (api: ReturnType<typeof hostClient>) => Promise<Opened>,
+): Promise<Opened> {
+  const { roomHostEntry, relayEntry } = roomHostPaths($.plugin.root)
   const home = await homeDir($)
   const dataDir = home === null ? null : pathIn(home.path, '.claude', 'studio', 'room-hosts', randomKey().slice(0, 12))
   const hostKey = randomKey()
@@ -363,46 +461,88 @@ export async function createRoom($: EngineInterface, options: CreateOptions): Pr
     isExiting: false,
     isStopping: false,
     room: null,
-    login: loginKey(login),
-    cwd,
-    isInRepo: repo !== null,
+    login: loginKey(options.login),
+    cwd: options.cwd,
+    isInRepo: options.isInRepo,
     isAttached: false,
+    isMoved: false,
+    claim: options.claim,
   }
   const started = await startRoomHost($, roomHostEntry, { port: 0, dataDir, hostKey }, onHostEvent(h))
   h.roomHost = started.child
   h.port = started.port
   h.localUrl = `http://127.0.0.1:${started.port}`
   hosting = h
-  await updateHosting($, () => ({ phase: 'starting', provider: null, address: null, warning: null, note }))
+  await updateHosting($, () => ({ phase: 'starting', provider: null, address: null, warning: null, note: options.note }))
   inBackground($, superviseRoomHost($, h))
 
-  let created
+  let opened: Opened
   try {
-    created = await hostClient($, h.localUrl, hostKey).createRoom({
-      name: options.name,
-      visibility: options.visibility,
-      repoUrl: repo === null ? undefined : repoUrlOf(repo),
-      login,
-      role,
-    })
+    opened = await open(hostClient($, h.localUrl, hostKey))
   } catch (error) {
     await finish($, h, null)
     throw error
   }
-  const { room, token, roomKey } = created
+  const { room, token, roomKey, role } = opened
   h.room = { id: room.id, name: room.name, visibility: room.visibility, roomKey }
-  await saveSaved($, { hostUrl: h.localUrl, roomId: room.id, token, login: room.hostLogin, isHost: true, roomKey })
+  await saveSaved($, { ...opened.keep, hostUrl: h.localUrl, roomId: room.id, token, login: room.hostLogin, isHost: true, isAttached: false, roomKey })
   await setAccount($, { login: room.hostLogin, role, hostUrl: h.localUrl })
   startSync($)
+  startCoordinator($, h, room.id)
   inBackground($, $.ui.open({ id: PANE_ID, title: `room: ${room.name}` }))
-  inBackground($, exposeAndAnnounce($, h, providers))
+  inBackground($, exposeAndAnnounce($, h, options.providers))
+  inBackground($, watchDirectory($, h))
+  return opened
+}
 
-  const how = providers.length === 1 ? providers[0] : `${providers.join(', then ')}`
-  return [
-    `${room.name} is open on this machine${repo === null ? '' : ` for ${repo.owner}/${repo.name}`}.`,
-    `Making it reachable (${how}); the invite link prints here once the address answers.`,
-    ...(note === null ? [] : [note]),
-  ].join('\n')
+// Takes over hosting from the mirror this session kept (PLAN.md §5): the room
+// carried on in a room host of its own, then reachable and listed like a new
+// one. `claim`: the host vanished, so the directory entry is claimed rather
+// than replaced, and `onTaken` runs when another candidate was first.
+export async function rehostRoom(
+  $: EngineInterface,
+  request: ImportRoomRequest,
+  options: { keep: Partial<Saved>; claim: Hosting['claim'] },
+): Promise<string> {
+  refuseSecond()
+  const { providers, note } = await checkHost($, { via: 'auto' })
+  const cwd = await $.session.root()
+  const role = request.members.find(member => loginKey(member.login) === loginKey(request.hostLogin))?.role ?? 'member'
+  const { room } = await launch($, { login: request.hostLogin, cwd, isInRepo: (await repoOf($, cwd)) !== null, providers, note, claim: options.claim }, async api => {
+    const imported = await api.importRoom(request)
+    return { ...imported, roomKey: request.roomKey, role, keep: options.keep }
+  })
+  return room.name
+}
+
+// A planned handover, the host's side: the room says who takes over, takes no
+// more changes, and this session lets go of it. The room host stays up a
+// moment (`graceMs`) so every member's long-poll hears it, then stops; null:
+// the session is ending, and the engine ends the room host with it.
+export async function handOverHosting($: EngineInterface, to: string, graceMs: number | null): Promise<void> {
+  const h = hosting
+  if (h === undefined || h.room === null) throw new Error('this session does not host the room')
+  stopCoordinator()
+  await hostClient($, h.localUrl, h.hostKey).handover(h.room.id, to)
+  h.isMoved = true
+  if (h.isAttached) {
+    await detachHost($)
+    return
+  }
+  if (graceMs === null) return
+  const stop = async () => {
+    await $.clock.sleep(graceMs)
+    await stopHosting($)
+  }
+  inBackground($, stop())
+}
+
+// The room closed for everyone at its host's word (/room leave --close).
+export async function closeHostedRoom($: EngineInterface): Promise<void> {
+  const h = hosting
+  if (h === undefined || h.room === null) throw new Error('this session does not host the room')
+  await hostClient($, h.localUrl, h.hostKey).closeRoom(h.room.id)
+  if (h.isAttached) await detachHost($)
 }
 
 // The host person's own end of hosting (the mod's session ending is the
@@ -510,6 +650,8 @@ export async function attachRoomHost($: EngineInterface, options: AttachOptions)
     cwd: await $.session.root(),
     isInRepo: false,
     isAttached: true,
+    isMoved: false,
+    claim: null,
   }
   hosting = h
   const saved: Saved = {
@@ -525,6 +667,7 @@ export async function attachRoomHost($: EngineInterface, options: AttachOptions)
   await setAccount($, { login: saved.login, role: session.role, hostUrl: localUrl })
   await updateHosting($, () => ({ phase: 'up', provider: null, address: localUrl, warning: ATTACHED_WARNING, note: null }))
   startSync($)
+  startCoordinator($, h, session.room.id)
   inBackground($, $.ui.open({ id: PANE_ID, title: `room: ${session.room.name}` }))
   return [
     `Attached to the room host at ${localUrl}: you are in "${session.room.name}" as ${saved.login} (${session.role}).`,
@@ -538,6 +681,7 @@ export async function detachHost($: EngineInterface): Promise<void> {
   const h = hosting
   if (h === undefined || !h.isAttached) return
   hosting = undefined
+  stopCoordinator()
   await setJoins($, [])
   await updateHosting($, () => null)
 }

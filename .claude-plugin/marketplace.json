@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "studio",
+  "description": "Studio: multi-user agent rooms for Claude Code.",
+  "owner": {
+    "name": "BKlappi",
+    "url": "https://github.com/BKlappi"
+  },
+  "plugins": [
+    {
+      "name": "studio",
+      "description": "Multi-user agent rooms: shared rooms, task handoffs, overlap detection and compact statuses",
+      "source": "./plugin",
+      "category": "development"
+    }
+  ]
+}

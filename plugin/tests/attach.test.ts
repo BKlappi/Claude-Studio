@@ -20,7 +20,7 @@ const room = (name: string, visibility: 'open' | 'private' = 'open', id = ID): R
   hostLogin: 'ben',
   createdAt: 1,
 })
-const hostRoom = (found: Room): HostRoom => ({ ...found, members: [{ login: 'ben', role: 'admin', verified: true, joinedAt: 1 }] })
+const hostRoom = (found: Room): HostRoom => ({ ...found, members: [{ login: 'ben', role: 'admin', verified: true, joinedAt: 1, isOnline: true }] })
 
 type World = { rooms?: HostRoom[]; waiting?: PendingJoin[]; env?: Record<string, string> }
 
@@ -72,7 +72,7 @@ function machine(on: On, world: World = {}) {
     const current = rooms[0] ?? room('dev')
     if (url.pathname === '/v1/me') return ok({ login: 'ben', role: 'admin', room: current })
     if (url.pathname.endsWith('/snapshot')) {
-      const snapshot: RoomSnapshot = { room: current, members: [], tasks: [], log: [], statusText: '', cursor: 0 }
+      const snapshot: RoomSnapshot = { room: current, members: [], tasks: [], log: [], statusText: '', batch: null, state: null, cursor: 0 }
       return ok(snapshot)
     }
     if (url.pathname.endsWith('/leave')) return ok({ ok: true })
@@ -201,7 +201,7 @@ test('the hand-run room host stops: sync says so, /room leave lets go, and a new
   roomHost.isDown = true
   await clock.advance(3000)
   await clock.settle()
-  expect(await command($, 'studio', 'status')).toMatch(/sync: {3}cannot reach the room host at http:\/\/127\.0\.0\.1:8787/)
+  expect(await command($, 'studio', 'status')).toMatch(/sync: {3}reconnecting \(1 failed\): cannot reach the room host at http:\/\/127\.0\.0\.1:8787/)
   expect(await command($, 'room', 'create "x"')).toBe('room create: this session is attached to a room host already: /room leave first')
 
   expect(await command($, 'room', 'leave')).toMatch(/^Left the room \(cannot reach the room host at http:\/\/127\.0\.0\.1:8787: .*ECONNREFUSED.*\)\.$/)
@@ -227,7 +227,7 @@ test('the hand-run room host comes back with another key: sync says what to do',
 })
 
 test('attach refuses a room whose host is not among its members', async ($, on) => {
-  const odd: HostRoom = { ...room('backend'), members: [{ login: 'ana', role: 'owner', verified: true, joinedAt: 1 }] }
+  const odd: HostRoom = { ...room('backend'), members: [{ login: 'ana', role: 'owner', verified: true, joinedAt: 1, isOnline: true }] }
   const { calls } = machine(on, { rooms: [odd] })
   await $.session.start(START)
 

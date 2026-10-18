@@ -3,8 +3,8 @@
 // changes without the other.
 
 import { expect, test } from 'claude-code/testing'
-import type { LogEntry, Member, PendingJoin, Room, RoomSnapshot, Task } from '../protocol/types'
-import type { LogEntryView, MemberView, PendingJoinView, RoomInfo, RoomView, TaskView } from '../types'
+import type { LogEntry, Member, PendingJoin, Room, RoomSnapshot, RoomState, Task } from '../protocol/types'
+import type { LogEntryView, MemberView, PendingJoinView, RoomInfo, RoomStateView, RoomView, TaskView } from '../types'
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const same = <A, B>(isSame: Same<A, B>) => isSame
@@ -17,5 +17,6 @@ test('the state contract mirrors the wire types', () => {
     same<LogEntry, LogEntryView>(true),
     same<RoomSnapshot, RoomView>(true),
     same<PendingJoin, PendingJoinView>(true),
-  ]).toEqual([true, true, true, true, true, true])
+    same<RoomState, RoomStateView>(true),
+  ]).toEqual([true, true, true, true, true, true, true])
 })

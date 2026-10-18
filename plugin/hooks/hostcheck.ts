@@ -50,22 +50,32 @@ export type HostCheck = {
   note: string | null
 }
 
-// Where the room host lives: beside the plugin, in the same repo.
+// Where the room host lives: inside the plugin's own folder, so a plugin
+// installed from a marketplace (which copies only that folder) has it too.
 export function roomHostPaths(pluginRoot: string) {
-  const repoDir = parentOf(pluginRoot)
-  const roomHostDir = pathIn(repoDir, 'room-host')
+  const roomHostDir = pathIn(pluginRoot, 'room-host')
   return {
-    repoDir,
     roomHostDir,
     roomHostEntry: pathIn(roomHostDir, 'src', 'index.ts'),
     relayEntry: pathIn(roomHostDir, 'src', 'relay.ts'),
   }
 }
 
+// What installs the room host's dependencies. In Studio's own repo they are a
+// pnpm workspace's; in an installed plugin there is only the room host's
+// package.json, and the person runs npm for it from the prompt (`!`), which
+// finds npm however the platform names it.
+async function installLine($: EngineInterface, roomHostDir: string): Promise<string> {
+  const repoDir = parentOf($.plugin.root)
+  if (await $.fs.exists(pathIn(repoDir, 'pnpm-workspace.yaml'))) return `Run \`pnpm install\` in ${repoDir}`
+  const folder = roomHostDir.replace(/\\/g, '/')
+  return `Type this here (once, a few seconds): ! npm install --omit=dev --prefix "${folder}"`
+}
+
 // Throws one error naming everything that stops this machine from hosting.
 export async function checkHost($: EngineInterface, options: { via: Provider | 'auto' }): Promise<HostCheck> {
   const { via } = options
-  const { repoDir, roomHostDir, roomHostEntry, relayEntry } = roomHostPaths($.plugin.root)
+  const { roomHostDir, roomHostEntry, relayEntry } = roomHostPaths($.plugin.root)
   const [platform, node, tailnet, cloudflared, hasEntry, hasRelay, hasDeps] = await Promise.all([
     platformOf($),
     runIfThere($, ['node', '--version'], { timeoutMs: RUN_TIMEOUT_MS }).catch(() => null),
@@ -73,9 +83,8 @@ export async function checkHost($: EngineInterface, options: { via: Provider | '
     hasCloudflared($),
     $.fs.exists(roomHostEntry),
     $.fs.exists(relayEntry),
-    // pnpm links a package's dependencies into its own node_modules; another
-    // installer may hoist them to the repo's.
-    Promise.all([roomHostDir, repoDir].map(dir => $.fs.exists(pathIn(dir, 'node_modules', 'hono')))).then(found => found.some(Boolean)),
+    // Both pnpm and npm put a package's dependencies in its own node_modules.
+    $.fs.exists(pathIn(roomHostDir, 'node_modules', 'hono')),
   ])
 
   const problems: string[] = []
@@ -91,11 +100,9 @@ export async function checkHost($: EngineInterface, options: { via: Provider | '
   }
 
   if (!hasEntry) {
-    problems.push(
-      `The room host is not where the plugin expects it (${roomHostEntry}). Studio's repo has to be installed whole, next to plugin/.`,
-    )
+    problems.push(`The room host is not where the plugin expects it (${roomHostEntry}). Studio's install is incomplete: install the plugin again.`)
   } else if (!hasDeps) {
-    problems.push(`The room host's dependencies are not installed. Run \`pnpm install\` in ${repoDir}`)
+    problems.push(`The room host's dependencies are not installed. ${await installLine($, roomHostDir)}`)
   }
   if (via === 'lan' && hasEntry && !hasRelay) problems.push(`The LAN relay is missing (${relayEntry}).`)
 

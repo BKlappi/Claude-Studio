@@ -15,7 +15,7 @@ const KEY_FILE = 'C:\\Users\\ana\\.ssh\\id_ed25519'
 const PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBfakekey'
 const SIGNATURE = '-----BEGIN SSH SIGNATURE-----\nU1NIU0lH\n-----END SSH SIGNATURE-----\n'
 const ROOM: Room = { id: ROOM_ID, name: 'frontend', visibility: 'open', repoUrl: 'https://github.com/acme/app', hostLogin: 'ben', createdAt: 1 }
-const SNAPSHOT: RoomSnapshot = { room: ROOM, members: [], tasks: [], log: [], statusText: '', cursor: 0 }
+const SNAPSHOT: RoomSnapshot = { room: ROOM, members: [], tasks: [], log: [], statusText: '', batch: null, state: null, cursor: 0 }
 const ADMITTED: JoinAdmitted = { status: 'admitted', room: ROOM, login: 'ana', role: 'member', verified: true, token: 'ana-token' }
 
 const LINK = inviteLink({ roomId: ROOM_ID, address: HOST, roomKey: null })

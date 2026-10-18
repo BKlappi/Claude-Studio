@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  room-host:
+  plugin/room-host:
     dependencies:
       '@hono/node-server':
         specifier: ^2.1.5

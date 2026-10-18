@@ -6,10 +6,11 @@ import { inviteLink } from '../protocol/join'
 import type { Invite } from '../protocol/join'
 import { getHosting } from './state'
 
-// Where the plugin installs from, as `<owner>/<repo>`. Phase 2 (PLAN.md §7,
-// "Ship") puts it on GitHub and sets this; until then an invite carries no
-// install line, because there is nothing to point at.
-export const MARKETPLACE: string | null = null
+// Where the plugin installs from, as `<owner>/<repo>` (the repo holds
+// .claude-plugin/marketplace.json). Today the test repo; change it, and the
+// README's install line, before the plugin is published. null: no install
+// line in invites.
+export const MARKETPLACE: string | null = 'BKlappi/Claude-Studio'
 
 export const installLine = (): string | null => (MARKETPLACE === null ? null : `/plugin install studio --marketplace ${MARKETPLACE}`)
 

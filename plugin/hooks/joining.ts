@@ -16,7 +16,7 @@ import { PANE_ID } from './commands'
 import { linkIdentity, signJoin } from './identity'
 import { describe, inBackground } from './processes'
 import { loadIdentity, saveSaved, setAccount, setJoining } from './state'
-import type { Identity } from './state'
+import type { Identity, Saved } from './state'
 import { startSync } from './sync'
 
 export const RESOLVE_FOR_MS = 90_000
@@ -34,8 +34,11 @@ export function cancelJoining($: EngineInterface): Promise<unknown> {
 
 type Step = { kind: 'joined'; admitted: JoinAdmitted } | { kind: 'pending'; ticket: string; reason: string }
 
-async function enterRoom($: EngineInterface, invite: Invite, admitted: JoinAdmitted): Promise<void> {
+// `keep`: what the session carries over when it follows its room to a new
+// host (room mode, the room's secret).
+async function enterRoom($: EngineInterface, invite: Invite, admitted: JoinAdmitted, keep: Partial<Saved> = {}): Promise<void> {
   await saveSaved($, {
+    ...keep,
     hostUrl: invite.address,
     roomId: admitted.room.id,
     token: admitted.token,
@@ -48,7 +51,7 @@ async function enterRoom($: EngineInterface, invite: Invite, admitted: JoinAdmit
   inBackground($, $.ui.open({ id: PANE_ID, title: `room: ${admitted.room.name}` }))
 }
 
-async function joinOnce($: EngineInterface, invite: Invite, identity: Identity): Promise<Step> {
+async function joinOnce($: EngineInterface, invite: Invite, identity: Identity, keep: Partial<Saved> = {}): Promise<Step> {
   const api = joinClient($, invite.address)
   const { nonce } = await api.nonce(invite.roomId)
   let signature: string | null = null
@@ -71,7 +74,7 @@ async function joinOnce($: EngineInterface, invite: Invite, identity: Identity):
     roomKey: invite.roomKey ?? undefined,
   })
   if (answer.status === 'pending') return { kind: 'pending', ticket: answer.ticket, reason: answer.reason }
-  await enterRoom($, invite, answer)
+  await enterRoom($, invite, answer, keep)
   return { kind: 'joined', admitted: answer }
 }
 
@@ -83,7 +86,7 @@ async function fail($: EngineInterface, address: string, why: string): Promise<v
   $.ui.toast(`Studio: could not join: ${why}`)
 }
 
-async function waitForHost($: EngineInterface, invite: Invite, ticket: string, reason: string, run: number): Promise<void> {
+async function waitForHost($: EngineInterface, invite: Invite, ticket: string, reason: string, run: number, keep: Partial<Saved> = {}): Promise<void> {
   await setJoining($, { phase: 'waiting', address: invite.address, note: reason })
   const api = joinClient($, invite.address)
   const until = (await $.clock.now()) + TICKET_FOR_MS
@@ -100,7 +103,7 @@ async function waitForHost($: EngineInterface, invite: Invite, ticket: string, r
     }
     if (answer.status === 'pending') continue
     if (answer.status === 'refused') return fail($, invite.address, answer.reason)
-    await enterRoom($, invite, answer)
+    await enterRoom($, invite, answer, keep)
     $.ui.toast(`Studio: ${joinedText(answer)}`)
     $.ui.log(`Studio: ${joinedText(answer)}`)
     return
@@ -142,4 +145,17 @@ export async function joinRoom($: EngineInterface, invite: Invite): Promise<stri
     inBackground($, retryWhileResolving($, invite, identity, run))
     return `${invite.address} does not resolve yet (a new tunnel's name takes up to a minute): trying again for 90 s.`
   }
+}
+
+// Joins the room again at a new room host (PLAN.md §5: the room moved), on
+// the same SSH signature as any join; the new host's roster lets the person
+// back in in their role. One try: 'pending' when the new host person decides
+// (no usable key), which goes on in the background like any join.
+export async function rejoin($: EngineInterface, invite: Invite, keep: Partial<Saved>): Promise<'joined' | 'pending'> {
+  const identity = (await loadIdentity($)) ?? (await linkIdentity($))
+  const run = ++attempt
+  const step = await joinOnce($, invite, identity, keep)
+  if (step.kind === 'joined') return 'joined'
+  inBackground($, waitForHost($, invite, step.ticket, step.reason, run, keep))
+  return 'pending'
 }

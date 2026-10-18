@@ -1,2 +1,5 @@
+# Sources stay LF on every checkout, whatever core.autocrlf says.
+* text=auto eol=lf
+
 # Signature fixtures keep the line endings ssh-keygen wrote (Windows' build writes CRLF).
-room-host/test/fixtures/** -text
+plugin/room-host/test/fixtures/** -text

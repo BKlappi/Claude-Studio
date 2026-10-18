@@ -27,6 +27,8 @@ function snapshotOf(roomId: string, seqs: number[]): RoomSnapshot {
       seq, roomId, kind: 'message', author: 'ben', body: `#${seq}`, data: null, at: seq,
     })),
     statusText: '',
+    batch: null,
+    state: null,
     cursor: seqs.at(-1) ?? 0,
   }
 }

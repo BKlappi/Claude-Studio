@@ -1,5 +1,5 @@
 node_modules/
-room-host/data/
+plugin/room-host/data/
 *.db
 *.db-wal
 *.db-shm

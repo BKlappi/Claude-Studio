@@ -13,16 +13,36 @@ the **room host** on their machine, and the others connect to it (PLAN.md D14).
 ## Layout
 
 ```
+.claude-plugin/         marketplace.json: the repo is a one-plugin marketplace (source ./plugin)
 plugin/                 Claude Code plugin (a mod: function hooks, no build step)
   .claude-plugin/       plugin.json manifest (types/ is written by Claude Code, git-ignored)
-  hooks/                hooks module: register.tsx wires commands, pane, sync, file tracking
-  protocol/             wire types, status format, join message; shared with the room host
+  hooks/                hooks module: register.tsx wires commands, pane, band, room mode, sync, file tracking
+  commands/             /local, a prompt command (markdown)
+  protocol/             wire types, status format, join message, batching window, branch names; shared with the room host
   types/index.d.ts      the mod's $.state contract (self-contained mirror of protocol types)
   tests/                `claude plugin test` suites
-room-host/              the room host: Node 24 + Hono + node:sqlite, no build step
-  src/db/migrations/    rooms, members, sessions, append-only room log, tasks, status, touches
-  src/                  rooms and sessions, tasks, HTTP app, SSH signature check, CLI
-  test/                 node:test suites
+  room-host/            the room host: Node 24 + Hono + node:sqlite, no build step
+    src/db/migrations/  rooms, members, sessions, append-only room log, tasks, status, touches
+    src/                rooms and sessions, tasks, HTTP app, SSH signature check, CLI
+    test/               node:test suites (*.spec.ts: the mod's test runner takes *.test.ts)
+```
+
+The room host lives inside `plugin/` because installing a plugin copies only that
+folder: the mod finds the room host at `<plugin>/room-host`.
+
+## Install
+
+```text
+/plugin install studio --marketplace BKlappi/Claude-Studio
+```
+
+(The repo is the test repo for now; the line changes with the published one, as
+does `MARKETPLACE` in `plugin/hooks/invite.ts`.) Joining a room needs nothing
+more. To **host** a room, the machine also needs Node 24 and the room host's
+dependencies, a one-time step `/room create` names when it is missing:
+
+```text
+! npm install --omit=dev --prefix "<the plugin's folder>/room-host"
 ```
 
 ## Requirements
@@ -37,8 +57,22 @@ Phase 1's cores are in (PLAN.md §7): `/room create` hosts a room from the mod
 (room host + Tailscale, a cloudflared quick tunnel or the LAN, one restart
 each), `/studio login` links your GitHub login and SSH key, `/room join <link>`
 gets you in with a signed handshake (or the host person lets you in by hand),
-and rooms are listed on the repo's `studio-rooms` branch (`/room list`). Still
-to come for phase 1: the two-machine run (PLAN.md §10).
+and rooms are listed on the repo's `studio-rooms` branch (`/room list`). Phase 2
+adds the pane's task actions (press a task for its spec; **Release**, **Done**,
+**Blocked** for whoever claimed it; host and successors marked), a band above
+the prompt and a status line when the pane is closed, and offline handling (the
+mod backs off from 3 to 30 s and says "reconnecting"; `/room say` and `/room
+task` typed meanwhile are sent in order once the room host answers). Phase 3 makes it
+one shared room: the room reaches every pane within a moment (a long-poll); in a room,
+**room mode** sends what you type to the room as yours (`/local <prompt>` runs one
+prompt in your own Claude, `/room mode off` turns it off); the host's mod runs the
+room's **coordinator**, which reads what people say a few seconds at a time and makes,
+merges and splits tasks, turns requests down and keeps the room's decisions, all of it
+said in the room; when the host leaves or their machine goes quiet, a member who can
+host **takes the room over** and the others follow it; and a claimed task **runs** on
+your machine as a Studio worker, here or in a worktree of its own, after you said so
+for a task someone else asked for, its report posted to the room. Still to come:
+planning and model slots (phase 4) onwards, and the two-machine runs (HANDOFF.md).
 
 ```text
 /studio login [<github-login>]
@@ -47,9 +81,15 @@ to come for phase 1: the two-machine run (PLAN.md §10).
 /room join <link>
 /room list                  # open rooms in this repo, and whether they answer
 /room attach [<url>] [<host key>] [--room <name>]   # development, see below
+/room mode [on|off]         # where what you type goes: the room, or your own Claude
+/local <prompt>             # one prompt to your own Claude while room mode is on
+/room batch <seconds>       # how long the coordinator waits after the last message
+/room leave [--export] [--close]   # the host hands the room over first
+/room export                # the room's summary to docs/rooms/<room>.md
 ```
 
-The host needs Node 24, `pnpm install` done in this repo, and cloudflared or
+The host needs Node 24, the room host's dependencies (`pnpm install` in this
+repo, or the `npm install` line under Install), and cloudflared or
 Tailscale for people on other networks (`winget install --id
 Cloudflare.cloudflared`, `brew install cloudflared`). `/room create` checks all
 of that first and names what is missing, with the line that installs it. `gh`,
@@ -60,7 +100,7 @@ waits for the host person.
 
 ```sh
 pnpm install
-pnpm dev                    # room host on http://127.0.0.1:8787, db in room-host/data/
+pnpm dev                    # room host on http://127.0.0.1:8787, db in plugin/room-host/data/
 ```
 
 It prints its host key. Set `STUDIO_HOST_KEY` to keep one key across the
@@ -83,12 +123,12 @@ the one open room there (`--room <name>` picks one; with none open it makes
 The host key never leaves the machine: only loopback addresses are accepted. A
 reload of the mod forgets the attachment; run `/room attach` again.
 
-`node room-host/src/index.ts --port 0 [--data <dir>]` is the form the host's
+`node plugin/room-host/src/index.ts --port 0 [--data <dir>]` is the form the host's
 mod starts. It listens on 127.0.0.1 only, keeps its data in memory unless given
 `--data`, and writes one JSON line per event on stdout (`ready` with port and
 host key, `room-closed`, `exiting`). It exits once its last room closes,
 deleting its data. Joining is `POST /join/nonce`, `POST /join` and, while the
-host person decides, `GET /join/tickets/<ticket>` (room-host/src/joins.ts).
+host person decides, `GET /join/tickets/<ticket>` (plugin/room-host/src/joins.ts).
 
 ## Checks
 
@@ -102,4 +142,3 @@ pnpm studio                 # = claude --plugin-dir ./plugin
 The room pane draws in the terminal and the Desktop app's Code tab, not in the
 VS Code extension's chat panel. An unasked pane waits for a terminal 144
 columns wide; `/room open` asks for it directly.
-# Claude-Studio

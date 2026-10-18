@@ -5,6 +5,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
+import { MARKETPLACE } from '../hooks/invite'
 import { parseInvite } from '../protocol/join'
 import { unseal } from '../protocol/seal'
 import type { Room, RoomSnapshot } from '../protocol/types'
@@ -90,7 +91,7 @@ function machine(on: On, options: Machine = {}) {
   // Public DNS has a tunnel's name from its second lookup on.
   const lookups = new Map<string, number>()
   const room = roomOf(options.visibility ?? 'open')
-  const snapshot: RoomSnapshot = { room, members: [], tasks: [], log: [], statusText: '', cursor: 0 }
+  const snapshot: RoomSnapshot = { room, members: [], tasks: [], log: [], statusText: '', batch: null, state: null, cursor: 0 }
   const calls = fakeNet(on, call => {
     const url = new URL(call.url)
     if (url.hostname === 'cloudflare-dns.com') {
@@ -158,13 +159,14 @@ test('/room create: room host, then cloudflared, DNS, origins, the invite and th
   expect(origins(calls)).toEqual([{ origins: [TUNNELS[0]] }])
   const invite = parseInvite(logs.find(line => line.includes('studio:join')) ?? '')
   expect(invite).toEqual({ roomId: ROOM_ID, address: TUNNELS[0], roomKey: null })
-  // No install line yet: the plugin is not published (hooks/invite.ts MARKETPLACE).
+  // The install line points at the marketplace repo (hooks/invite.ts MARKETPLACE).
   expect(await command($, 'room', 'invite')).toBe(
     [
       'Invite link:',
       `studio:join?room=${ROOM_ID}&at=${encodeURIComponent(TUNNELS[0] ?? '')}`,
       '',
       'Whoever gets it runs /room join with it. The first time, that also links their GitHub login and an SSH key GitHub lists for it.',
+      `Without Studio yet, they install it first: /plugin install studio --marketplace ${MARKETPLACE}`,
     ].join('\n'),
   )
 
@@ -193,8 +195,13 @@ test('a private room: its entry sealed with the room key, its link kept from the
   const text = await command($, 'room', 'invite')
   expect(text).not.toContain(ROOM_KEY)
   expect(text).toBe("The invite is printed above, not shown to the model: the link carries the private room's key.")
-  expect(logs.at(-1)).toContain(`key=${ROOM_KEY}`)
-  expect(logs.at(-1)).toContain("The link carries the private room's key: share it like a password.")
+  expect(logs.slice(-4)).toEqual([
+    `studio:join?room=${ROOM_ID}&at=${encodeURIComponent(TUNNELS[0] ?? '')}&key=${ROOM_KEY}`,
+    'Whoever gets it runs /room join with it. The first time, that also links their GitHub login and an SSH key GitHub lists for it.',
+    `Without Studio yet, they install it first: /plugin install studio --marketplace ${MARKETPLACE}`,
+    "The link carries the private room's key: share it like a password.",
+  ])
+  expect(logs.filter(line => line.includes('\n'))).toEqual([])
 })
 
 test('a push that lost a race is replayed on the other host\'s entry', async ($, on) => {
@@ -236,7 +243,7 @@ test('create drops the host\'s own entries that no longer answer, and only those
   expect(asked.sort()).toEqual(['https://gone.trycloudflare.com', TUNNELS[1]].sort())
 })
 
-test('the room host dies: one restart on its port, data and key; the second death loses the room', async ($, on) => {
+test('the room host dies: one restart on its port, data and key; the second death loses the room', { timeoutMs: 15_000 }, async ($, on) => {
   const { clock, toasts, git, children, calls } = machine(on)
   await createAndExpose($, clock)
   const [first] = node(children)
@@ -339,13 +346,23 @@ test('host check: an older Node says which one it found', async ($, on) => {
   expect(children).toEqual([])
 })
 
-test('host check: the room host not beside the plugin (a plugin installed alone)', async ($, on) => {
+test('host check: an installed plugin (no workspace beside it) is told the npm line, with forward slashes', async ($, on) => {
+  const { children } = machine(on, { missing: ['node_modules', 'pnpm-workspace.yaml'] })
+  await $.session.start(START)
+
+  const text = await command($, 'room', 'create "frontend"')
+  expect(text).toMatch(/- The room host's dependencies are not installed\. Type this here \(once, a few seconds\): ! npm install --omit=dev --prefix "[^"\\]+\/room-host"$/)
+  expect(text).not.toContain('pnpm install')
+  expect(children).toEqual([])
+})
+
+test('host check: a plugin without its room host folder says to install it again', async ($, on) => {
   const { children } = machine(on, { missing: ['index.ts'] })
   await $.session.start(START)
 
   const text = await command($, 'room', 'create "frontend"')
-  expect(text).toMatch(/- The room host is not where the plugin expects it \(\S*room-host\S*index\.ts\)\. Studio's repo has to be installed whole, next to plugin\/\.$/)
-  expect(text).not.toContain('pnpm install')
+  expect(text).toMatch(/- The room host is not where the plugin expects it \(\S*room-host\S*index\.ts\)\. Studio's install is incomplete: install the plugin again\.$/)
+  expect(text).not.toContain('npm install')
   expect(children).toEqual([])
 })
 

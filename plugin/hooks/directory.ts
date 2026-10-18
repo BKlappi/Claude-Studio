@@ -156,7 +156,7 @@ const isLostRace = (result: ProcessRunResult) =>
 export async function changeDirectory(
   $: EngineInterface,
   cwd: string,
-  change: (entries: DirectoryEntry[]) => DirectoryEntry[],
+  change: (entries: DirectoryEntry[]) => DirectoryEntry[] | Promise<DirectoryEntry[]>,
   message: string,
   login: string,
 ): Promise<boolean> {
@@ -167,7 +167,7 @@ export async function changeDirectory(
 
   for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
     const { head, entries } = await readDirectory($, cwd)
-    const next = change(entries)
+    const next = await change(entries)
     const text = formatDirectory(next)
     if (text === formatDirectory(entries) && (head !== null || next.length === 0)) return false
 
@@ -206,6 +206,67 @@ export async function publishRoom(
   )
 }
 
-export function unpublishRoom($: EngineInterface, cwd: string, roomId: string, login: string): Promise<boolean> {
-  return changeDirectory($, cwd, entries => entries.filter(entry => entry.id !== roomId), 'studio: a room closed', login)
+// The room's entry out of the directory, if it still names this host at
+// `address`: after a handover the entry is the new host's, and stays.
+export function unpublishRoom(
+  $: EngineInterface,
+  cwd: string,
+  roomId: string,
+  login: string,
+  mine: { address: string | null; roomKey: string | null },
+): Promise<boolean> {
+  return changeDirectory(
+    $,
+    cwd,
+    async entries => {
+      const entry = entries.find(candidate => candidate.id === roomId)
+      if (entry === undefined) return entries
+      const listing = await openEntry(entry, mine.roomKey)
+      const isMine = listing !== null && listing.host.toLowerCase() === login.toLowerCase() && (mine.address === null || listing.address === mine.address)
+      return isMine ? entries.filter(candidate => candidate.id !== roomId) : entries
+    },
+    'studio: a room closed',
+    login,
+  )
+}
+
+// The room's entry as the directory lists it now, and what it says (a private
+// one only with its key). Both null when the room is not listed.
+export async function findRoom(
+  $: EngineInterface,
+  cwd: string,
+  roomId: string,
+  roomKey: string | null,
+): Promise<{ entry: DirectoryEntry | null; listing: Listing | null }> {
+  const { entries } = await readDirectory($, cwd)
+  const entry = entries.find(candidate => candidate.id === roomId) ?? null
+  return { entry, listing: entry === null ? null : await openEntry(entry, roomKey) }
+}
+
+// Lists the room at `listing.address` only while its entry is still the one
+// read before (`expected`; null: none). Candidates taking over from a host
+// that vanished (PLAN.md §5) race through here: the first push wins, and a
+// later one finds the entry changed and takes nothing.
+export async function claimRoom(
+  $: EngineInterface,
+  cwd: string,
+  listing: Listing,
+  roomKey: string | null,
+  options: { login: string; expected: DirectoryEntry | null },
+): Promise<'won' | 'taken'> {
+  const entry = await entryOf(listing, roomKey)
+  const before = JSON.stringify(options.expected)
+  let isTaken = false
+  await changeDirectory(
+    $,
+    cwd,
+    entries => {
+      const current = entries.find(candidate => candidate.id === listing.id) ?? null
+      isTaken = JSON.stringify(current) !== before
+      return isTaken ? entries : [...entries.filter(candidate => candidate.id !== listing.id), entry]
+    },
+    listing.visibility === 'open' ? `studio: ${listing.host} takes over ${listing.name}` : 'studio: a private room has a new host',
+    options.login,
+  )
+  return isTaken ? 'taken' : 'won'
 }

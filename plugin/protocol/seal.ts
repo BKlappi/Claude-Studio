@@ -94,6 +94,34 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return difference === 0
 }
 
+// --- a room host proving it hosts the room (PLAN.md phase 3, handover) --------
+//
+// Members hold the room's secret; a room host at an address they do not know
+// yet (a new host, a quick tunnel's new name) answers their nonce with
+//
+//   HMAC-SHA256(secret, "studio-host v1\nroom=<id>\norigin=<origin>\nnonce=<nonce>\n")
+//
+// The origin is the one the member dialled: a room host proves itself only for
+// its own addresses, so a stranger relaying the challenge gets nothing usable.
+
+export function hostProofMessage(challenge: { roomId: string; origin: string; nonce: string }): string {
+  return `studio-host v1\nroom=${challenge.roomId}\norigin=${challenge.origin}\nnonce=${challenge.nonce}\n`
+}
+
+export async function hostProof(secret: string, challenge: { roomId: string; origin: string; nonce: string }): Promise<string> {
+  return toBase64url(await hmacSha256(encoder.encode(secret), encoder.encode(hostProofMessage(challenge))))
+}
+
+export async function isHostProof(secret: string, challenge: { roomId: string; origin: string; nonce: string }, proof: string): Promise<boolean> {
+  let given: Uint8Array
+  try {
+    given = fromBase64url(proof)
+  } catch {
+    return false
+  }
+  return sameBytes(given, fromBase64url(await hostProof(secret, challenge)))
+}
+
 // `text` sealed for the room: only someone holding `roomKey` reads it. The
 // room id is bound in, so an entry cannot be moved to another room.
 export async function seal(roomKey: string, roomId: string, text: string): Promise<string> {
