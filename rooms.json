@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "rooms": []
+  "rooms": [
+    {
+      "id": "62dc04b4-e983-4763-b172-51eef7d6b2fc",
+      "visibility": "open",
+      "name": "t1",
+      "host": "bklappi",
+      "address": "https://africa-collector-websites-homeland.trycloudflare.com",
+      "updatedAt": 1792426505716
+    }
+  ]
 }
